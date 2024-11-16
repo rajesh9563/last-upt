@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Dynamic User Location Map with Nearby Places</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <style>
+    /* General Styles */
+    #map {
+      height: 100vh;
+      width: 100%;
+    }
+
+    .recenter-button {
+      position: absolute;
+      bottom: 80px;
+      right: 100px;
+      background: white;
+      border: 2px solid #4CAF50;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 1000;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .recenter-button:hover {
+      background: #4CAF50;
+      color: white;
+    }
+
+    .toggle-button {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      padding: 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      z-index: 1000;
+    }
+
+    .toggle-button:hover {
+      background-color: #45a049;
+    }
+
+    /* Media Queries */
+    @media (max-width: 768px) {
+      .recenter-button {
+        bottom: 20px;
+        right: 20px;
+        width: 45px;
+        height: 45px;
+      }
+
+      #map {
+        height: 90vh;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .recenter-button {
+        bottom: 15px;
+        right: 15px;
+        width: 40px;
+        height: 40px;
+      }
+
+      #map {
+        height: 85vh;
+      }
+    }
+
+    @media (min-width: 1024px) {
+      .recenter-button {
+        bottom: 30px;
+        right: 30px;
+        width: 50px;
+        height: 50px;
+      }
+
+      #map {
+        height: 100vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="recenter-button" onclick="recenterMap()">
+    <i class="fa-solid fa-location-arrow"></i>
+  </div>
+  <button class="toggle-button" onclick="toggleSatelliteView()">
+    <i class="fa-solid fa-satellite"></i> Satellite View
+  </button>
+
+  <script>
+    let map, userMarker, radiusCircle, userLat, userLng, satelliteLayer, defaultLayer;
+
+    // Define map layers
+    defaultLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    });
+
+    satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '&copy; <a href="https://www.esri.com/">Esri</a>, NASA, USGS, ESA',
+    });
+
+    // Initialize map
+    document.addEventListener("DOMContentLoaded", () => {
+      map = L.map('map', {
+        center: [0, 0],
+        zoom: 15,
+        layers: [defaultLayer] // Default view on load
+      });
+
+      map.zoomControl.setPosition('topleft');
+
+      if (navigator.geolocation) {
+        navigator.geolocation.watchPosition(
+          position => {
+            const { latitude, longitude } = position.coords;
+            updateUserLocation(latitude, longitude);
+          },
+          error => {
+            console.error('Error retrieving location:', error);
+            alert('Location permissions are needed for full functionality.');
+          },
+          { 
+            enableHighAccuracy: true,   // Request higher accuracy
+            maximumAge: 0               // Do not use cached position
+          }
+        );
+      } else {
+        alert('Geolocation is not supported by your browser.');
+      }
+    });
+
+    function updateUserLocation(lat, lng) {
+      userLat = lat;
+      userLng = lng;
+
+      const userLocation = [lat, lng];
+      map.setView(userLocation);
+
+      if (!userMarker) {
+        userMarker = L.marker(userLocation).addTo(map).bindPopup('You are here!')
+          .on('mouseover', function () {
+            this.openPopup();  // Show popup on hover
+          })
+          .on('mouseout', function () {
+            this.closePopup();  // Close popup when mouse leaves
+          });
+      } else {
+        userMarker.setLatLng(userLocation);
+      }
+
+      if (!radiusCircle) {
+        radiusCircle = L.circle(userLocation, {
+          radius: 1000,
+          color: 'red',
+          fillColor: '#f03',
+          fillOpacity: 0.2,
+        }).addTo(map);
+      } else {
+        radiusCircle.setLatLng(userLocation);
+      }
+
+      findNearbyPlaces(lat, lng);
+    }
+
+    function recenterMap() {
+      if (userLat && userLng) {
+        map.setView([userLat, userLng], 15);
+      } else {
+        alert('Location not available yet. Please wait for detection.');
+      }
+    }
+
+    function toggleSatelliteView() {
+      const currentLayer = map.hasLayer(defaultLayer) ? defaultLayer : satelliteLayer;
+      if (currentLayer === defaultLayer) {
+        map.removeLayer(defaultLayer);
+        map.addLayer(satelliteLayer);
+      } else {
+        map.removeLayer(satelliteLayer);
+        map.addLayer(defaultLayer);
+      }
+    }
+
+    // Use Overpass API to fetch all types of places within 1km radius
+    function findNearbyPlaces(lat, lng) {
+      const query = `
+        [out:json];
+        (
+          node["amenity"](around:1000, ${lat}, ${lng});
+          way["amenity"](around:1000, ${lat}, ${lng});
+          relation["amenity"](around:1000, ${lat}, ${lng});
+          node["shop"](around:1000, ${lat}, ${lng});
+          way["shop"](around:1000, ${lat}, ${lng});
+          relation["shop"](around:1000, ${lat}, ${lng});
+          node["tourism"](around:1000, ${lat}, ${lng});
+          way["tourism"](around:1000, ${lat}, ${lng});
+          relation["tourism"](around:1000, ${lat}, ${lng});
+          node["leisure"](around:1000, ${lat}, ${lng});
+          way["leisure"](around:1000, ${lat}, ${lng});
+          relation["leisure"](around:1000, ${lat}, ${lng});
+        );
+        out center;`;
+
+      fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`)
+        .then(response => response.json())
+        .then(data => {
+          if (data.elements.length === 0) {
+            alert('No places found within 1km radius.');
+          }
+
+          data.elements.forEach(element => {
+            const { lat, lon, tags } = element;
+            const name = tags.name || 'Unnamed Place';
+            const type = tags.amenity || tags.shop || tags.tourism || tags.leisure || 'Place';
+
+            const marker = L.marker([lat, lon])
+              .addTo(map)
+              .bindPopup(`<b>${name}</b><br>Type: ${type}`)
+              .on('mouseover', function () {
+                this.openPopup();
+              })
+              .on('mouseout', function () {
+                this.closePopup();
+              });
+          });
+        })
+        .catch(error => {
+          console.error('Error fetching nearby places:', error);
+          alert('Could not load nearby places. Please check your internet connection.');
+        });
+    }
+  </script>
+</body>
+</html>
